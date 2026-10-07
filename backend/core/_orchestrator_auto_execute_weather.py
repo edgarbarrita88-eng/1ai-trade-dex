@@ -1,11 +1,15 @@
 """Carved verbatim out of ``backend/core/orchestrator.py`` — statements moved, no logic changed."""
 
-from .orchestrator import (
-    Optional,
-    PolymarketCLOB,
-)
+import asyncio
+import os
+from pathlib import Path
+import signal
+from typing import Optional, Dict
 
-from . import orchestrator as _facade
+from loguru import logger
+
+from backend.config import settings
+from backend.data.polymarket_clob import PolymarketCLOB
 
 async def _auto_execute_weather(signals: list, clob: Optional[PolymarketCLOB]) -> None:
     """Execute weather signals without Telegram confirmation (simulation only)."""
@@ -22,13 +26,13 @@ async def _auto_execute_weather(signals: list, clob: Optional[PolymarketCLOB]) -
                 price=price,
                 size=sig.suggested_size,
             )
-            _facade.logger.info(
+            logger.info(
                 f"[AUTO-SIM] Weather trade: {sig.market.city_name} "
                 f"{sig.direction.upper()} ${sig.suggested_size:.2f} "
                 f"order={result.order_id}"
             )
         except Exception as e:
-            _facade.logger.warning(
+            logger.warning(
                 f"[orchestrator._auto_execute_weather] {type(e).__name__}: Auto-execute failed: {e}",
                 exc_info=True,
             )
@@ -39,16 +43,17 @@ async def main() -> None:
 
     configure_logging()
 
-    orchestrator = _facade.Orchestrator()
+    from .orchestrator import Orchestrator
+    orchestrator = Orchestrator()
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
 
     def _signal_handler():
-        _facade.logger.info("Shutdown signal received")
+        logger.info("Shutdown signal received")
         stop_event.set()
 
-    for sig in (_facade.signal.SIGINT, _facade.signal.SIGTERM):
+    for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _signal_handler)
 
     def _dump_handler(sig, frame):
@@ -82,10 +87,10 @@ async def main() -> None:
         except Exception as err:
             print(f"Error in signal handler: {err}", file=sys.stderr, flush=True)
 
-    _facade.signal.signal(_facade.signal.SIGUSR1, _dump_handler)
+    signal.signal(signal.SIGUSR1, _dump_handler)
 
     await orchestrator.start()
-    _facade.logger.info("[DEBUG] orchestrator.start() completed — now entering main event loop")
+    logger.info("[DEBUG] orchestrator.start() completed — now entering main event loop")
 
     try:
         from backend.models.database import SystemSettings
@@ -107,15 +112,15 @@ async def main() -> None:
                 service = get_mirofish_service()
                 if not service.is_active():
                     service.start()
-                    _facade.logger.info("MiroFish service auto-started (enabled in settings)")
+                    logger.info("MiroFish service auto-started (enabled in settings)")
     except Exception as e:
-        _facade.logger.debug(f"MiroFish auto-start check failed: {e}")
+        logger.debug(f"MiroFish auto-start check failed: {e}")
 
-    _facade.logger.info("PolyEdge running. Press Ctrl+C to stop.")
+    logger.info("PolyEdge running. Press Ctrl+C to stop.")
     await stop_event.wait()
 
     await orchestrator.stop()
-    _facade.logger.info("PolyEdge stopped.")
+    logger.info("PolyEdge stopped.")
 def init_phase2_modules() -> dict:
     """Initialize Phase 2 modules based on feature flags. Returns dict of active instances."""
     from backend.config import settings
@@ -128,7 +133,7 @@ def init_phase2_modules() -> dict:
 
             active["whale_listener"] = PolygonListener()
         except Exception as e:
-            _facade.logger.warning(
+            logger.warning(
                 f"[orchestrator.init_phase2_modules] {type(e).__name__}: PolygonListener init failed: {e}",
                 exc_info=True,
             )
@@ -139,7 +144,7 @@ def init_phase2_modules() -> dict:
 
             active["news_feed"] = FeedAggregator()
         except Exception as e:
-            _facade.logger.warning(
+            logger.warning(
                 f"[orchestrator.init_phase2_modules] {type(e).__name__}: FeedAggregator init failed: {e}",
                 exc_info=True,
             )
@@ -155,7 +160,7 @@ def init_phase2_modules() -> dict:
                 RiskManager(), wallet_router=get_wallet_router()
             )
         except Exception as e:
-            _facade.logger.warning(
+            logger.warning(
                 f"[orchestrator.init_phase2_modules] {type(e).__name__}: AutoTrader init failed: {e}",
                 exc_info=True,
             )
@@ -166,7 +171,7 @@ def init_phase2_modules() -> dict:
 
             active["arbitrage"] = ArbitrageDetector()
         except Exception as e:
-            _facade.logger.warning(
+            logger.warning(
                 f"[orchestrator.init_phase2_modules] {type(e).__name__}: ArbitrageDetector init failed: {e}",
                 exc_info=True,
             )
@@ -181,7 +186,7 @@ def init_phase2_modules() -> dict:
             active["agi_research"] = _research
             active["agi_research_task"] = _task
         except Exception as e:
-            _facade.logger.warning(
+            logger.warning(
                 f"[orchestrator.init_phase2_modules] {type(e).__name__}: AGI research pipeline init failed: {e}",
                 exc_info=True,
             )

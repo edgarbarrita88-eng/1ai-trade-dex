@@ -1,23 +1,37 @@
 """Methods carved verbatim out of ``backend/core/orchestrator.py``."""
 
-from . import orchestrator as _facade
+import asyncio
+import os
+from pathlib import Path
+from typing import Optional, Dict
+
+from cachetools import TTLCache
+from loguru import logger
+
+from backend.config import settings
+from backend.data.polymarket_clob import (
+    PolymarketCLOB,
+    clob_from_settings,
+    clob_breaker,
+)
+from backend.core.risk.risk_profiles import apply_profile, get_active_profile_name
 
 class OrchestratorMixin:
     def __init__(self):
-        self._clob: _facade.Optional[_facade.PolymarketCLOB] = None
-        self._clob_clients: _facade.Dict[str, _facade.PolymarketCLOB] = {}
+        self._clob: Optional[PolymarketCLOB] = None
+        self._clob_clients: Dict[str, PolymarketCLOB] = {}
         self._bot = None
         self._copy_trader = None
-        self._copy_task: _facade.Optional[_facade.asyncio.Task] = None
+        self._copy_task: Optional[asyncio.Task] = None
         self._running = False
-        self._condition_cache: _facade.TTLCache = _facade.TTLCache(maxsize=2000, ttl=3600)
+        self._condition_cache: TTLCache = TTLCache(maxsize=2000, ttl=3600)
     def clear_cache(self) -> None:
         """Clear the condition cache. Call after major state changes."""
         self._condition_cache.clear()
     async def start(self) -> None:
         """Start all subsystems."""
         self._running = True
-        _facade.logger.info("Orchestrator starting...")
+        logger.info("Orchestrator starting...")
 
         # Publish a startup heartbeat immediately so the external guardian
         # does not treat cold start as an event-loop freeze before the
@@ -27,17 +41,17 @@ class OrchestratorMixin:
 
             _touch_heartbeat_file()
         except Exception as exc:
-            _facade.logger.debug(f"Startup heartbeat touch failed (non-fatal): {exc}")
+            logger.debug(f"Startup heartbeat touch failed (non-fatal): {exc}")
 
         # Start BalanceAggregator (real-time multi-venue balance tracking)
         try:
             from backend.core.balance_aggregator import BalanceAggregator
 
             self._balance_aggregator = BalanceAggregator()
-            _facade.asyncio.create_task(self._balance_aggregator.start())
-            _facade.logger.info("BalanceAggregator started (WS + polling)")
+            asyncio.create_task(self._balance_aggregator.start())
+            logger.info("BalanceAggregator started (WS + polling)")
         except Exception as e:
-            _facade.logger.warning(f"BalanceAggregator failed to start: {e}")
+            logger.warning(f"BalanceAggregator failed to start: {e}")
             self._balance_aggregator = None
 
         # Start ActivityTracker (real-time blockchain activity: fills, transfers)
@@ -55,23 +69,23 @@ class OrchestratorMixin:
             )
             # Register platform sources
             await self._register_activity_sources()
-            _facade.asyncio.create_task(self._activity_tracker.start_all())
-            _facade.logger.info("ActivityTracker started")
+            asyncio.create_task(self._activity_tracker.start_all())
+            logger.info("ActivityTracker started")
         except Exception as e:
-            _facade.logger.warning(f"ActivityTracker failed to start: {e}")
+            logger.warning(f"ActivityTracker failed to start: {e}")
             self._activity_tracker = None
 
         # Reset CLOB circuit breaker to ensure we start in CLOSED state
-        _facade.clob_breaker.reset()
+        clob_breaker.reset()
 
         for mode in ["paper", "testnet", "live"]:
             try:
-                clob_client = _facade.clob_from_settings(mode=mode)
+                clob_client = clob_from_settings(mode=mode)
                 await clob_client.__aenter__()
                 self._clob_clients[mode] = clob_client
-                _facade.logger.info(f"CLOB client initialized for mode: {mode}")
+                logger.info(f"CLOB client initialized for mode: {mode}")
             except Exception as exc:
-                _facade.logger.warning(f"CLOB client init failed for mode {mode}: {exc}")
+                logger.warning(f"CLOB client init failed for mode {mode}: {exc}")
                 if mode in ("testnet", "live"):
                     raise RuntimeError(
                         f"Failed to initialize CLOB client for {mode} mode. "
@@ -81,24 +95,24 @@ class OrchestratorMixin:
 
         self._clob = self._clob_clients.get("live") or self._clob_clients.get("paper")
 
-        if _facade.settings.is_mode_active("live"):
-            _facade.logger.info("Live mode: deriving API credentials from private key...")
+        if settings.is_mode_active("live"):
+            logger.info("Live mode: deriving API credentials from private key...")
             try:
                 creds = await self._clob_clients["live"].create_or_derive_api_key()
                 if creds:
-                    _facade.logger.info("API credentials derived successfully.")
+                    logger.info("API credentials derived successfully.")
                 else:
-                    _facade.logger.warning(
+                    logger.warning(
                         "Failed to derive API credentials. Bot will continue in degraded mode. "
                         "CLOB balance checks and live orders will be unavailable."
                     )
             except Exception as e:
-                _facade.logger.warning(
+                logger.warning(
                     f"API credential derivation failed: {e}. "
                     f"Bot continuing in degraded mode."
                 )
 
-        if _facade.settings.TELEGRAM_BOT_TOKEN:
+        if settings.TELEGRAM_BOT_TOKEN:
             from backend.bot.telegram_bot import bot_from_settings
 
             self._bot = bot_from_settings()
@@ -114,9 +128,9 @@ class OrchestratorMixin:
 
             registry.auto_discover()
 
-        profile_name = _facade.get_active_profile_name()
-        profile = _facade.apply_profile(profile_name)
-        _facade.logger.info(
+        profile_name = get_active_profile_name()
+        profile = apply_profile(profile_name)
+        logger.info(
             "Applied risk profile '%s': drawdown=%d%%, confidence=%s, edge=%s",
             profile.name,
             int(profile.daily_drawdown_limit_pct * 100),
@@ -129,10 +143,10 @@ class OrchestratorMixin:
         load_all_strategies()  # trigger auto-registration
         genome_count = load_active_genome_strategies()  # compile DB genome strategies
         if genome_count:
-            _facade.logger.info(f"Loaded {genome_count} genome-compiled strategies from registry")
+            logger.info(f"Loaded {genome_count} genome-compiled strategies from registry")
 
         # Seed is handled by lifespan.py - don't call twice
-        _facade.logger.info("Strategy config seeding handled by lifespan startup")
+        logger.info("Strategy config seeding handled by lifespan startup")
 
         # Single session for backfill + mode context setup (fixes USE-AFTER-CLOSE CORE-1)
         from backend.db.utils import get_db_session
@@ -142,7 +156,7 @@ class OrchestratorMixin:
 
             backfilled = backfill_missing_outcomes(db)
             if backfilled > 0:
-                _facade.logger.info(
+                logger.info(
                     f"Backfilled {backfilled} missing strategy outcomes on startup"
                 )
             db.commit()
@@ -182,10 +196,10 @@ class OrchestratorMixin:
 
                 # Register context
                 register_context(mode, context)
-                _facade.logger.info(
+                logger.info(
                     f"Registered ModeExecutionContext for mode: {mode} (client={'SET' if clob_client else 'NONE'})"
                 )
-                _facade.logger.info(
+                logger.info(
                     f"ModeExecutionContext registered for mode: {mode} with {len(strategy_configs)} strategies"
                 )
 
@@ -194,36 +208,37 @@ class OrchestratorMixin:
         from backend.core.scheduling.scheduler import start_scheduler
 
         start_scheduler()
-        _facade.logger.info(
+        logger.info(
             "[DEBUG] start_scheduler() completed, now registering AGI event handlers"
         )
 
         from backend.core.agi_event_handlers import register_agi_event_handlers
 
         register_agi_event_handlers()
-        _facade.logger.info("[DEBUG] register_agi_event_handlers() completed")
+        logger.info("[DEBUG] register_agi_event_handlers() completed")
 
         # --- AGI Node Discovery ---
         try:
             from backend.agi.node_registry import node_registry
 
             node_registry.auto_discover("backend.agi.nodes")
-            _facade.logger.info(f"AGI nodes discovered: {len(node_registry._plugins)}")
+            logger.info(f"AGI nodes discovered: {len(node_registry._plugins)}")
         except Exception as e:
-            _facade.logger.warning(f"AGI node discovery failed: {e}")
+            logger.warning(f"AGI node discovery failed: {e}")
 
-        _facade.logger.info("Settlement WebSocket handler skipped for now.")
-        self._phase2 = _facade.init_phase2_modules()
-        _facade.logger.info(
+        logger.info("Settlement WebSocket handler skipped for now.")
+        from ._orchestrator_auto_execute_weather import init_phase2_modules
+        self._phase2 = init_phase2_modules()
+        logger.info(
             f"[DEBUG] Phase 2 modules: {list(self._phase2.keys()) if self._phase2 else 'none'}"
         )
         if self._phase2:
-            _facade.logger.info(f"Phase 2 modules active: {list(self._phase2.keys())}")
+            logger.info(f"Phase 2 modules active: {list(self._phase2.keys())}")
 
-        _facade.logger.info("Orchestrator started.")
+        logger.info("Orchestrator started.")
     async def stop(self) -> None:
         """Graceful shutdown."""
-        _facade.logger.info("Orchestrator stopping...")
+        logger.info("Orchestrator stopping...")
         self._running = False
         self._condition_cache.clear()
 
@@ -239,15 +254,15 @@ class OrchestratorMixin:
                         if stop:
                             await stop()
                 except Exception:
-                    _facade.logger.debug("orchestrator: failed to stop market_maker consumer instances")
+                    logger.debug("orchestrator: failed to stop market_maker consumer instances")
         except Exception:
-            _facade.logger.debug("orchestrator: failed during market_maker consumer cleanup")
+            logger.debug("orchestrator: failed during market_maker consumer cleanup")
 
         if self._bot:
             await self._bot.stop()
 
         if self._clob:
-            if _facade.settings.is_mode_active("live"):
+            if settings.is_mode_active("live"):
                 await self._clob.cancel_all_orders()
             await self._clob.__aexit__(None, None, None)
 
@@ -257,7 +272,7 @@ class OrchestratorMixin:
 
             await close_crypto_client()
         except Exception:
-            _facade.logger.debug("orchestrator: failed to close crypto client on shutdown")
+            logger.debug("orchestrator: failed to close crypto client on shutdown")
 
         for mode, clob_client in self._clob_clients.items():
             if not clob_client:
@@ -265,7 +280,7 @@ class OrchestratorMixin:
             if mode == "live":
                 await clob_client.cancel_all_orders()
             await clob_client.__aexit__(None, None, None)
-            _facade.logger.info(f"CLOB client closed for mode: {mode}")
+            logger.info(f"CLOB client closed for mode: {mode}")
 
         from backend.core.scheduling.scheduler import stop_scheduler
 
@@ -279,4 +294,4 @@ class OrchestratorMixin:
         if hasattr(self, "_activity_tracker") and self._activity_tracker:
             await self._activity_tracker.stop_all()
 
-        _facade.logger.info("Orchestrator stopped.")
+        logger.info("Orchestrator stopped.")

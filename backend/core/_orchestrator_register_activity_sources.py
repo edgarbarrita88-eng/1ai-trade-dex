@@ -1,6 +1,14 @@
 """Methods carved verbatim out of ``backend/core/orchestrator.py``."""
 
-from . import orchestrator as _facade
+import asyncio
+import os
+from pathlib import Path
+from typing import Optional, Dict
+
+from loguru import logger
+
+from backend.config import settings
+from backend.data.polymarket_clob import PolymarketCLOB, clob_from_settings
 
 class OrchestratorMixin2:
     async def _register_activity_sources(self):
@@ -9,7 +17,7 @@ class OrchestratorMixin2:
 
         addr = settings.WALLET_ADDRESS or settings.POLYMARKET_WALLET_ADDRESS or "0x0"
         tracker = self._activity_tracker
-        skip_raw = _facade.os.environ.get("SKIP_ACTIVITY_SOURCES", "").strip().lower()
+        skip_raw = os.environ.get("SKIP_ACTIVITY_SOURCES", "").strip().lower()
         skip_sources = (
             set(s.strip() for s in skip_raw.split(",") if s.strip())
             if skip_raw
@@ -27,7 +35,7 @@ class OrchestratorMixin2:
             await aster.connect()
             tracker.register_source("aster", AsterActivitySource(addr, aster))
         except Exception as e:
-            _facade.logger.warning(f"Aster activity source skipped: {e}")
+            logger.warning(f"Aster activity source skipped: {e}")
 
         # Hyperliquid — WebSocket user_fills
         try:
@@ -42,7 +50,7 @@ class OrchestratorMixin2:
             await hl.connect()
             tracker.register_source("hyperliquid", HyperliquidActivitySource(addr, hl))
         except Exception as e:
-            _facade.logger.warning(f"Hyperliquid activity source skipped: {e}")
+            logger.warning(f"Hyperliquid activity source skipped: {e}")
 
         # Lighter — WebSocket balance + fills
         try:
@@ -55,7 +63,7 @@ class OrchestratorMixin2:
             await lighter.connect()
             tracker.register_source("lighter", LighterActivitySource(addr, lighter))
         except Exception as e:
-            _facade.logger.warning(f"Lighter activity source skipped: {e}")
+            logger.warning(f"Lighter activity source skipped: {e}")
 
         # Polymarket — CLOB fills (REST) + Polygon on-chain
         try:
@@ -63,10 +71,10 @@ class OrchestratorMixin2:
                 PolymarketActivitySource,
             )
 
-            clob = _facade.clob_from_settings()
+            clob = clob_from_settings()
             tracker.register_source("polymarket", PolymarketActivitySource(addr, clob))
         except Exception as e:
-            _facade.logger.warning(f"Polymarket activity source skipped: {e}")
+            logger.warning(f"Polymarket activity source skipped: {e}")
 
         # Azuro — Gnosis Chain subgraph bets
         try:
@@ -76,7 +84,7 @@ class OrchestratorMixin2:
             azuro_client = AzuroClient()
             tracker.register_source("azuro", AzuroActivitySource(addr, azuro_client))
         except Exception as e:
-            _facade.logger.warning(f"Azuro activity source skipped: {e}")
+            logger.warning(f"Azuro activity source skipped: {e}")
 
         # Limitless — DISABLED (smart wallet not deployed on Base, 2026-05-30)
         # try:
@@ -88,7 +96,7 @@ class OrchestratorMixin2:
         #     logger.warning(f"Limitless activity source skipped: {e}")
 
         # Kalshi — REST fills + position polling (skip when disabled or no credentials)
-        if settings.KALSHI_ENABLED and settings.KALSHI_PRIVATE_KEY_PATH and _facade.Path(settings.KALSHI_PRIVATE_KEY_PATH).expanduser().exists():
+        if settings.KALSHI_ENABLED and settings.KALSHI_PRIVATE_KEY_PATH and Path(settings.KALSHI_PRIVATE_KEY_PATH).expanduser().exists():
             try:
                 from backend.data.kalshi_client import KalshiClient
                 from backend.core.activity.sources.kalshi_source import KalshiActivitySource
@@ -96,7 +104,7 @@ class OrchestratorMixin2:
                 kalshi_client = KalshiClient()
                 tracker.register_source("kalshi", KalshiActivitySource(addr, kalshi_client))
             except Exception as e:
-                _facade.logger.warning(f"Kalshi activity source skipped: {e}")
+                logger.warning(f"Kalshi activity source skipped: {e}")
 
         # Ostium — SDK fills + position polling
         try:
@@ -106,7 +114,7 @@ class OrchestratorMixin2:
             ostium_client = OstiumClient()
             tracker.register_source("ostium", OstiumActivitySource(addr, ostium_client))
         except Exception as e:
-            _facade.logger.warning(f"Ostium activity source skipped: {e}")
+            logger.warning(f"Ostium activity source skipped: {e}")
 
         # Myriad — REST fills + position polling
         try:
@@ -116,7 +124,7 @@ class OrchestratorMixin2:
             myriad_client = MyriadClient()
             tracker.register_source("myriad", MyriadActivitySource(addr, myriad_client))
         except Exception as e:
-            _facade.logger.warning(f"Myriad activity source skipped: {e}")
+            logger.warning(f"Myriad activity source skipped: {e}")
 
         # SXBet — REST fills + balance polling
         try:
@@ -126,7 +134,7 @@ class OrchestratorMixin2:
             sxbet_client = SXBetClient()
             tracker.register_source("sxbet", SXBetActivitySource(addr, sxbet_client))
         except Exception as e:
-            _facade.logger.warning(f"SXBet activity source skipped: {e}")
+            logger.warning(f"SXBet activity source skipped: {e}")
 
         # Paper — event-driven (no polling, emits from trading engine)
         try:
@@ -134,7 +142,7 @@ class OrchestratorMixin2:
 
             tracker.register_source("paper", PaperActivitySource())
         except Exception as e:
-            _facade.logger.warning(f"Paper activity source skipped: {e}")
+            logger.warning(f"Paper activity source skipped: {e}")
     def _patch_weather_job(self) -> None:
         """Replace weather_scan_and_trade_job with a version that dispatches Telegram alerts."""
         import backend.core.scheduling.scheduler as sched_mod
@@ -169,18 +177,19 @@ class OrchestratorMixin2:
                             f"Telegram alert sent: {signal.market.city_name} {signal.direction.upper()}",
                         )
                     except Exception as e:
-                        _facade.logger.warning(
+                        logger.warning(
                             f"[orchestrator.patched_weather_job] {type(e).__name__}: Failed to send weather alert: {e}",
                             exc_info=True,
                         )
             else:
                 if mode == "paper":
-                    await _facade._auto_execute_weather(actionable[:3], clob)
+                    from ._orchestrator_auto_execute_weather import _auto_execute_weather
+                    await _auto_execute_weather(actionable[:3], clob)
 
             try:
                 await original_job(mode)
             except Exception as e:
-                _facade.logger.debug(
+                logger.debug(
                     f"[orchestrator.patched_weather_job] {type(e).__name__}: Original weather job error (non-fatal): {e}",
                     exc_info=True,
                 )
@@ -203,20 +212,20 @@ class OrchestratorMixin2:
             "confidence": getattr(signal, "model_probability", 0.5),
             "model_probability": getattr(signal, "model_probability", 0.5),
             "token_id": token_id,
-            "platform": _facade.settings.DEFAULT_VENUE,
+            "platform": settings.DEFAULT_VENUE,
             "market_type": "weather",
             "reasoning": "weather copy trade",
         }
 
         result = await execute_decision(decision, "weather_emos", db=None)
         if result is None:
-            _facade.logger.warning(
+            logger.warning(
                 f"Weather copy trade rejected (non-fatal): {signal.direction} "
                 f"${signal.suggested_size:.2f} @ {price:.3f}"
             )
             return None
 
-        _facade.logger.info(
+        logger.info(
             f"Weather trade executed: {signal.direction} ${signal.suggested_size:.2f} @ {price:.3f}"
         )
         return result
@@ -249,7 +258,7 @@ class OrchestratorMixin2:
                 )
                 accepted = await copy_engine.process(policy_signals, source_name)
                 if not accepted:
-                    _facade.logger.info("[orchestrator] CopyPolicyEngine filtered all signals")
+                    logger.info("[orchestrator] CopyPolicyEngine filtered all signals")
                     return
                 # Map back: keep only signals whose (condition_id, side) survived policy
                 accepted_keys = {(s.condition_id, s.side) for s in accepted}
@@ -263,7 +272,7 @@ class OrchestratorMixin2:
                     in accepted_keys
                 ]
             except Exception as e:
-                _facade.logger.warning(f"CopyPolicyEngine filtering failed (non-fatal): {e}")
+                logger.warning(f"CopyPolicyEngine filtering failed (non-fatal): {e}")
 
         for sig in signals:
             try:
@@ -276,12 +285,12 @@ class OrchestratorMixin2:
                         sig, executed=executed, order_id=order_id
                     )
                 else:
-                    _facade.logger.info(
+                    logger.info(
                         f"Copy signal: {sig.our_side} ${sig.our_size:.2f} "
                         f"executed={executed} order={order_id}"
                     )
             except Exception as e:
-                _facade.logger.error(
+                logger.error(
                     f"[orchestrator._handle_copy_signals] {type(e).__name__}: Copy signal execution error: {e}",
                     exc_info=True,
                 )
@@ -302,11 +311,11 @@ class OrchestratorMixin2:
             size = signal.our_size
 
         if size < 1.0:
-            _facade.logger.debug(f"Copy signal size ${size:.2f} below minimum — skipping")
+            logger.debug(f"Copy signal size ${size:.2f} below minimum — skipping")
             return None
 
         if not self._clob:
-            _facade.logger.warning("CLOB not available — skipping order placement")
+            logger.warning("CLOB not available — skipping order placement")
             return None
 
         return await self._clob.place_limit_order(
@@ -316,18 +325,18 @@ class OrchestratorMixin2:
             size=size,
         )
     async def on_mode_switch(self, new_mode: str) -> None:
-        _facade.settings.ACTIVE_MODES = new_mode
-        _facade.logger.info(f"Trading modes updated to: {new_mode}")
+        settings.ACTIVE_MODES = new_mode
+        logger.info(f"Trading modes updated to: {new_mode}")
     async def _on_pause(self) -> None:
         from backend.core.scheduling.scheduler import stop_scheduler
 
         stop_scheduler()
-        _facade.logger.info("Trading paused via Telegram")
+        logger.info("Trading paused via Telegram")
     async def _on_resume(self) -> None:
         from backend.core.scheduling.scheduler import start_scheduler
 
         start_scheduler()
-        _facade.logger.info("Trading resumed via Telegram")
+        logger.info("Trading resumed via Telegram")
     async def _condition_to_token(self, condition_id: str, outcome: str) -> str:
         """Map condition_id + outcome ("YES"/"NO") to a CLOB token ID via Gamma API."""
         cache_key = f"{condition_id}:{outcome}"
@@ -339,14 +348,14 @@ class OrchestratorMixin2:
         try:
             async with _httpx.AsyncClient() as client:
                 resp = await client.get(
-                    f"{_facade.settings.GAMMA_API_URL}/markets",
+                    f"{settings.GAMMA_API_URL}/markets",
                     params={"conditionId": condition_id},
                     timeout=10.0,
                 )
             resp.raise_for_status()
             data = resp.json()
             if not data:
-                _facade.logger.warning(
+                logger.warning(
                     f"No market found for condition_id={condition_id}, using fallback"
                 )
                 result = condition_id
@@ -365,7 +374,7 @@ class OrchestratorMixin2:
             self._condition_cache[cache_key] = result
             return result
         except (_httpx.HTTPError, KeyError, IndexError) as e:
-            _facade.logger.warning(
+            logger.warning(
                 f"[orchestrator._condition_to_token] {type(e).__name__}: Failed to resolve token_id for {condition_id}/{outcome}: {e}",
                 exc_info=True,
             )

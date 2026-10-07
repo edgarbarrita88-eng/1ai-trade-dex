@@ -196,6 +196,7 @@ def _setup_agi_jobs(scheduler, agi_self_tune_interval: int) -> None:
         )
 
     # --- AGI startup verification summary ---
+    promotion_interval = getattr(settings, "AGI_PROMOTION_INTERVAL_HOURS", 6)
     _agi_shadow_enabled = getattr(settings, "SHADOW_VALIDATE_ENABLED", True)
     _agi_cycle_enabled = getattr(settings, "AGI_IMPROVEMENT_CYCLE_ENABLED", True)
     _agi_health_enabled = getattr(settings, "AGI_HEALTH_CHECK_ENABLED", True)

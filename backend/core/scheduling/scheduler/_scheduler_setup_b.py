@@ -327,6 +327,7 @@ def _setup_monitoring_jobs(scheduler) -> None:
     from backend.db.utils import get_db_session
     from datetime import datetime, timezone, timedelta
 
+    modes = settings.active_modes_set
     disabled = []
     configs_to_schedule = []
     since = datetime.now(timezone.utc) - timedelta(hours=1)
