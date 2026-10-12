@@ -110,6 +110,49 @@ class ValidationStage(BaseExecutionStage):
             )
             return False
 
+        # ── BTC-5M mechanical gates (jev-trading port) ──
+        # MAX_ASK: never pay above cap — thin payoff past it.
+        # MIN_SECONDS_TO_ENTER: too-late guard, no entry into last N seconds.
+        # MAX_ENTERS: cap entries per market per window.
+        entry_price_g = float(decision.get("entry_price", decision.get("price", 0.0)))
+        max_ask = float(getattr(_settings, "BTC5M_MAX_ASK", 0.0))
+        if max_ask > 0 and 0.0 < entry_price_g > max_ask:
+            logger.warning(
+                "[ValidationStage] MAX_ASK BLOCKED: ask={:.4f} > cap={:.4f} for {}",
+                entry_price_g, max_ask, market_ticker,
+            )
+            return False
+
+        secs_left = decision.get("seconds_to_close")
+        if secs_left is None:
+            # Derive from market_end_date (ISO) — works for all strategies.
+            end_raw = decision.get("market_end_date")
+            if end_raw:
+                try:
+                    from datetime import datetime, timezone
+                    end_dt = datetime.fromisoformat(str(end_raw).replace("Z", "+00:00"))
+                    if end_dt.tzinfo is None:
+                        end_dt = end_dt.replace(tzinfo=timezone.utc)
+                    secs_left = (end_dt - datetime.now(timezone.utc)).total_seconds()
+                except Exception:
+                    secs_left = None
+        min_secs = int(getattr(_settings, "BTC5M_MIN_SECONDS_TO_ENTER", 0))
+        if secs_left is not None and min_secs > 0 and float(secs_left) < min_secs:
+            logger.warning(
+                "[ValidationStage] TOO_LATE BLOCKED: {}s left < min={}s for {}",
+                secs_left, min_secs, market_ticker,
+            )
+            return False
+
+        entries = int(decision.get("entry_count", 0))
+        max_enters = int(getattr(_settings, "BTC5M_MAX_ENTERS", 0))
+        if max_enters > 0 and entries >= max_enters:
+            logger.warning(
+                "[ValidationStage] MAX_ENTERS BLOCKED: {} >= {} for {}",
+                entries, max_enters, market_ticker,
+            )
+            return False
+
         # ── Universal R:R filter (prevents asymmetric loss pattern) ──
         # Binary prediction market: you pay `price` per share.
         #   YES trade: max_win = 1-entry_price, max_loss = entry_price

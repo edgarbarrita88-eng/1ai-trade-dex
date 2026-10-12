@@ -5,6 +5,8 @@ from .client import (
     OrderResult,
 )
 
+from py_clob_client_v2 import OrderType
+
 from . import client as _facade
 
 class PolymarketCLOBMixin2:
@@ -28,6 +30,7 @@ class PolymarketCLOBMixin2:
 
         price: [0.01, 0.99] — the limit price in USDC per share
         size: USDC amount to spend
+        order_type: "GTC" (rest on book) or "FOK" (fill-or-kill, all-or-nothing taker)
         """
         if size < _facade._cfg("MIN_ORDER_USDC", 5.0):
             return _facade.OrderResult(
@@ -131,7 +134,16 @@ class PolymarketCLOBMixin2:
             )
 
             # Post the signed order
-            resp = await _facade.asyncio.to_thread(self._clob_client.post_order, signed_order)
+            if order_type.upper() == "FOK":
+                resp = await _facade.asyncio.to_thread(
+                    self._clob_client.post_order,
+                    signed_order,
+                    OrderType.FOK,
+                )
+            else:
+                resp = await _facade.asyncio.to_thread(
+                    self._clob_client.post_order, signed_order
+                )
 
             order_id = (
                 resp.get("orderID", resp.get("id", "unknown"))

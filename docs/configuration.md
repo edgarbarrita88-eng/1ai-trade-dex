@@ -67,6 +67,20 @@ Live `BotState.bankroll`/`total_pnl` are derived caches. The source of truth is 
 | `MAX_TRADE_SIZE` | 75.0 | Max $ per BTC trade |
 | `KELLY_FRACTION` | 0.15 | Fractional Kelly multiplier |
 
+## BTC-5M Edge Gate
+
+Mechanical entry filter in `ValidationStage` (`backend/core/execution_pipeline/stages/validate.py`). A decision is admitted only if ALL hold; otherwise it is logged as `BLOCKED` and the trade is skipped.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `BTC5M_MIN_EDGE_PP` | 10.0 | Min edge in percentage points (pWin − ask). Decision `edge` (fraction) must be ≥ `value/100`. |
+| `BTC5M_MAX_ASK` | 0.70 | Reject if ask/entry price above cap. `0` disables. |
+| `BTC5M_MIN_SECONDS_TO_ENTER` | 90 | Reject if time-to-close < N seconds. Derived from `market_end_date` when `seconds_to_close` absent. `0` disables. |
+| `BTC5M_MAX_ENTERS` | 1 | Max entries per market/window. Reject when `entry_count` ≥ cap. `0` disables. |
+| `BTC5M_FOK` | True | Submit taker orders fill-or-kill (`OrderType.FOK`) instead of resting `GTC`. |
+
+Order-type propagation: `NormalizedOrder.order_type` → `PolymarketProvider.place_order` → `PolymarketCLOB.place_limit_order(order_type=...)` → `py_clob_client_v2.post_order(signed, OrderType.FOK)`.
+
 ## Kalshi Settings
 
 | Setting | Default | Description |

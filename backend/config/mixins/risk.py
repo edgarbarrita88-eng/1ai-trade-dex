@@ -180,3 +180,14 @@ class RiskMixin:
     APEX_STALE_ODDS_THRESHOLD_MINUTES: int = 30
     APEX_LIQUIDITY_GAP_MIN_SPREAD: float = 0.03
     APEX_LIQUIDITY_GAP_MIN_VOLUME: float = 5000.0
+
+    # --------------------------------------------------------------------------
+    # BTC-5M EDGE GATE (jev-trading port) — mechanical entry filter
+    # --------------------------------------------------------------------------
+    # Enter only when pWin >= ask + MIN_EDGE_PP/100 (edge) AND ask <= MAX_ASK.
+    # ABSTAIN on NO_EDGE (below edge) or when seconds-to-close < MIN_SECONDS_TO_ENTER.
+    BTC5M_MIN_EDGE_PP: float = 10.0
+    BTC5M_MAX_ASK: float = 0.70
+    BTC5M_MIN_SECONDS_TO_ENTER: int = 90
+    BTC5M_MAX_ENTERS: int = 1
+    BTC5M_FOK: bool = True

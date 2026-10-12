@@ -13,7 +13,7 @@ from backend.markets.base_provider import (
     NormalizedPosition,
     VenueCapability,
 )
-from backend.markets.order_types import MarketInfo, OrderSide, OrderStatus, PositionSide
+from backend.markets.order_types import MarketInfo, OrderSide, OrderStatus, OrderType, PositionSide
 from backend.markets.provider_registry import market_registry
 from backend.config import settings
 from loguru import logger
@@ -87,6 +87,9 @@ class PolymarketProvider(BaseMarketProvider):
             )
 
         clob_side = "SELL" if order.side == OrderSide.SELL else "BUY"
+        clob_order_type = (
+            "FOK" if order.order_type == OrderType.FOK else "GTC"
+        )
         try:
             async with clob_from_settings(mode=self._mode) as clob:
                 # Auto-derive API credentials if not set
@@ -97,6 +100,7 @@ class PolymarketProvider(BaseMarketProvider):
                     side=clob_side,
                     price=float(price),
                     size=float(order.size),
+                    order_type=clob_order_type,
                 )
         except Exception as exc:
             import sys
