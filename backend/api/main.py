@@ -600,7 +600,7 @@ if __name__ == "__main__":
     import uvicorn
     from backend.core.config_service import get_setting
 
-    uvicorn.run(app, host="0.0.0.0", port=int(get_setting("PORT", default="8100")))
+    uvicorn.run(app, host="127.0.0.1", port=int(get_setting("PORT", default="8100")))
 
 app.include_router(calibration_router, prefix="/api/v1")
 app.include_router(evals_router, prefix="/api/v1")
